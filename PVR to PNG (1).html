@@ -1,0 +1,370 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>PVR to PNG</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one narrow column — drop zone on top, one row per converted texture below */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1b1f24; --muted: #646d78;
+  --line: #dde1e6; --accent: #2f6fdf; --err: #c23b3b;
+  --chk1: #e9ecef; --chk2: #ffffff;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15181c; --panel: #1d2126; --fg: #e6e9ed; --muted: #949ca6;
+  --line: #2e343b; --accent: #6b9cf0; --err: #ef7c7c; --chk1: #2a2f35; --chk2: #22262b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #15181c; --panel: #1d2126; --fg: #e6e9ed; --muted: #949ca6;
+  --line: #2e343b; --accent: #6b9cf0; --err: #ef7c7c; --chk1: #2a2f35; --chk2: #22262b; color-scheme: dark }
+
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); }
+.wrap { max-width: 860px; margin: 0 auto; padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 18px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+.sub { color: var(--muted); margin: 4px 0 0; line-height: 1.5; }
+.drop { border: 2px dashed var(--line); border-radius: 10px; background: var(--panel);
+  padding: 32px 16px; text-align: center; cursor: pointer; transition: border-color .15s; }
+.drop:hover, .drop.over, .drop:focus-visible { border-color: var(--accent); outline: none; }
+.drop strong { display: block; font-size: 15px; margin-bottom: 4px; }
+.drop span { color: var(--muted); font-size: 13px; }
+.bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.bar .count { color: var(--muted); margin-right: auto; }
+button { font: inherit; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .5; cursor: default; }
+.list { display: grid; gap: 12px; }
+.item { display: grid; grid-template-columns: 180px 1fr; gap: 16px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.thumb { width: 180px; height: 180px; display: grid; place-items: center; border-radius: 6px; overflow: hidden;
+  background: repeating-conic-gradient(var(--chk1) 0 25%, var(--chk2) 0 50%) 0 0 / 16px 16px; cursor: zoom-in; }
+.thumb img { width: 100%; height: 100%; object-fit: contain; }
+.meta { min-width: 0; display: grid; align-content: start; gap: 6px; }
+.name { font-weight: 600; overflow-wrap: anywhere; }
+.info { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.err { color: var(--err); font-size: 13px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.viewer { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: grid; place-items: center; z-index: 20;
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); cursor: zoom-out; }
+.viewer div { max-width: 100%; max-height: 100%; overflow: auto;
+  background: repeating-conic-gradient(var(--chk1) 0 25%, var(--chk2) 0 50%) 0 0 / 16px 16px; }
+.viewer img { display: block; image-rendering: pixelated; }
+@media (max-width: 520px) { .item { grid-template-columns: 1fr; } .thumb { width: 100%; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>PVR to PNG</h1>
+    <p class="sub">Converts PowerVR textures to PNG in your browser. Nothing is uploaded.</p>
+  </header>
+
+  <label class="drop" id="drop" tabindex="0">
+    <strong>Drop .pvr / .pvrgz / .pvr.ccz files here</strong>
+    <span>or click to choose files (multiple allowed)</span>
+    <input type="file" id="file" multiple hidden accept=".pvr,.pvrgz,.ccz,.gz">
+  </label>
+
+  <div class="bar" id="bar" hidden>
+    <span class="count" id="count"></span>
+    <label><input type="checkbox" id="flip"> Flip vertically</label>
+    <button id="saveAll" class="primary">Save all PNGs</button>
+    <button id="clear">Clear</button>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <p class="note">Supported: PVR v2 and v3, raw / gzip / Cocos2d CCZ. Formats: RGBA8888, BGRA8888, RGB888, RGBA4444, RGBA5551, RGB565, RGB555, I8, A8, AI88, PVRTC 4bpp. Only the top mip level is exported. Click a preview to see it full size.</p>
+</div>
+
+<script>
+// ---------------------------------------------------------------- containers
+async function inflate(bytes, fmt) {
+  const ds = new DecompressionStream(fmt);
+  const out = new Response(new Blob([bytes]).stream().pipeThrough(ds));
+  return new Uint8Array(await out.arrayBuffer());
+}
+async function unwrap(b) {
+  if (b[0] === 0x1f && b[1] === 0x8b) return inflate(b, "gzip");
+  const tag = String.fromCharCode(...b.subarray(0, 4));
+  if (tag === "CCZ!") {
+    if (((b[4] << 8) | b[5]) !== 0) throw new Error("CCZ compression type not supported");
+    return inflate(b.subarray(16), "deflate");
+  }
+  if (tag === "CCZp") throw new Error("Encrypted CCZp file (needs the game's key)");
+  return b;
+}
+
+// ---------------------------------------------------------------- helpers
+const scale = (v, bits) => bits === 8 ? v : Math.round(v * 255 / ((1 << bits) - 1));
+function maskInfo(m) {
+  if (!m) return null;
+  let shift = 0; while (!((m >>> shift) & 1)) shift++;
+  let bits = 0; while ((m >>> (shift + bits)) & 1) bits++;
+  return { m: m >>> 0, shift, bits };
+}
+function fromMasks(raw, w, h, bpp, masks) {
+  const nb = bpp / 8, out = new Uint8ClampedArray(w * h * 4);
+  const mi = masks.map(maskInfo);
+  for (let i = 0, o = 0; i < w * h; i++, o += 4) {
+    let px = 0;
+    for (let k = 0; k < nb; k++) px += raw[i * nb + k] * 2 ** (8 * k);
+    for (let c = 0; c < 4; c++) {
+      const q = mi[c];
+      out[o + c] = q ? scale(Math.floor(px / 2 ** q.shift) & ((1 << q.bits) - 1), q.bits) : 255;
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- PVRTC 4bpp
+function twiddle(bx, by, bw, bh) {
+  const mn = Math.min(bw, bh); let r = 0, src = 1, dst = 1, s = 0;
+  while (src < mn) { if (by & src) r |= dst; if (bx & src) r |= dst << 1; src <<= 1; dst <<= 2; s++; }
+  const big = bh < bw ? bx : by;
+  return r + (big >> s) * 2 ** (2 * s);
+}
+function colA(c) {
+  if (c & 0x8000) return [(c >> 10) & 31, (c >> 5) & 31, (c & 0x1e) | ((c & 0x1e) >> 4), 15];
+  const r = (c >> 8) & 15, g = (c >> 4) & 15, b = (c >> 1) & 7;
+  return [r << 1 | r >> 3, g << 1 | g >> 3, b << 2 | b >> 1, ((c >> 12) & 7) << 1];
+}
+function colB(c) {
+  if (c & 0x80000000) return [(c >>> 26) & 31, (c >>> 21) & 31, (c >>> 16) & 31, 15];
+  const r = (c >>> 24) & 15, g = (c >>> 20) & 15, b = (c >>> 16) & 15;
+  return [r << 1 | r >> 3, g << 1 | g >> 3, b << 1 | b >> 3, ((c >>> 28) & 7) << 1];
+}
+function decodePVRTC4(raw, w, h) {
+  const W = Math.max(w, 8), H = Math.max(h, 8), bw = W / 4, bh = H / 4;
+  const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+  const n = bw * bh, A = new Float32Array(n * 4), B = new Float32Array(n * 4);
+  const mod = new Uint32Array(n), col = new Uint32Array(n);
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    const i = y * bw + x, off = twiddle(x, y, bw, bh) * 8;
+    mod[i] = dv.getUint32(off, true); col[i] = dv.getUint32(off + 4, true);
+    const a = colA(col[i]), b = colB(col[i]);
+    for (let c = 0; c < 4; c++) {
+      const f = c < 3 ? 255 / 31 : 255 / 15;
+      A[i * 4 + c] = a[c] * f; B[i * 4 + c] = b[c] * f;
+    }
+  }
+  const out = new Uint8ClampedArray(w * h * 4);
+  const W0 = [0, 3, 5, 8], W1 = [0, 4, 4, 8];
+  for (let y = 0; y < h; y++) {
+    const fy = (y - 2) / 4, y0 = Math.floor(fy), ty = fy - y0;
+    const ya = ((y0 % bh) + bh) % bh, yb = (ya + 1) % bh;
+    for (let x = 0; x < w; x++) {
+      const fx = (x - 2) / 4, x0 = Math.floor(fx), tx = fx - x0;
+      const xa = ((x0 % bw) + bw) % bw, xb = (xa + 1) % bw;
+      const p = ya * bw + xa, q = ya * bw + xb, r = yb * bw + xa, s = yb * bw + xb;
+      const bi = (y >> 2) * bw + (x >> 2);
+      const m = (mod[bi] >>> (2 * ((y & 3) * 4 + (x & 3)))) & 3;
+      const punch = col[bi] & 1, wt = (punch ? W1[m] : W0[m]) / 8;
+      const o = (y * w + x) * 4;
+      for (let c = 0; c < 4; c++) {
+        const ua = (A[p*4+c]*(1-tx) + A[q*4+c]*tx)*(1-ty) + (A[r*4+c]*(1-tx) + A[s*4+c]*tx)*ty;
+        const ub = (B[p*4+c]*(1-tx) + B[q*4+c]*tx)*(1-ty) + (B[r*4+c]*(1-tx) + B[s*4+c]*tx)*ty;
+        out[o + c] = ua * (1 - wt) + ub * wt + 0.5;
+      }
+      if (punch && m === 2) out[o + 3] = 0;
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- PVR v2
+const V2 = {
+  0x00: [16, [0x0F00, 0x00F0, 0x000F, 0xF000], "ARGB4444"],
+  0x01: [16, [0x7C00, 0x03E0, 0x001F, 0x8000], "ARGB1555"],
+  0x02: [16, [0xF800, 0x07E0, 0x001F, 0], "RGB565"],
+  0x03: [16, [0x7C00, 0x03E0, 0x001F, 0], "RGB555"],
+  0x04: [24, [0xFF0000, 0x00FF00, 0x0000FF, 0], "RGB888"],
+  0x05: [32, [0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000], "ARGB8888"],
+  0x10: [16, [0xF000, 0x0F00, 0x00F0, 0x000F], "RGBA4444"],
+  0x11: [16, [0xF800, 0x07C0, 0x003E, 0x0001], "RGBA5551"],
+  0x12: [32, [0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000], "RGBA8888"],
+  0x13: [16, [0xF800, 0x07E0, 0x001F, 0], "RGB565"],
+  0x14: [16, [0x7C00, 0x03E0, 0x001F, 0], "RGB555"],
+  0x15: [24, [0x0000FF, 0x00FF00, 0xFF0000, 0], "RGB888"],
+  0x16: [8, "I8", "I8"], 0x17: [16, "AI88", "AI88"], 0x1B: [8, "A8", "A8"],
+  0x1A: [32, [0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000], "BGRA8888"],
+};
+function special(raw, w, h, kind) {
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const o = i * 4;
+    if (kind === "I8") { out[o] = out[o+1] = out[o+2] = raw[i]; out[o+3] = 255; }
+    else if (kind === "A8") { out[o] = out[o+1] = out[o+2] = 255; out[o+3] = raw[i]; }
+    else { out[o] = out[o+1] = out[o+2] = raw[i*2]; out[o+3] = raw[i*2+1]; }
+  }
+  return out;
+}
+function decodeV2(d) {
+  const dv = new DataView(d.buffer, d.byteOffset, d.byteLength), u = i => dv.getUint32(i * 4, true);
+  const hsz = u(0), h = u(1), w = u(2), mips = u(3), flags = u(4), bpp = u(6);
+  const masks = [u(7), u(8), u(9), u(10)], raw = d.subarray(hsz), t = flags & 0xff;
+  let px, name;
+  if (t === 0x19 || t === 0x0D) { px = decodePVRTC4(raw, w, h); name = "PVRTC 4bpp"; }
+  else if (t === 0x18 || t === 0x0C) throw new Error("PVRTC 2bpp is not supported yet");
+  else if (V2[t]) {
+    const [fbpp, spec, nm] = V2[t]; name = nm;
+    if (typeof spec === "string") px = special(raw, w, h, spec);
+    else {
+      let m = (masks[0] || masks[1] || masks[2]) ? masks : spec;
+      if (!(flags & 0x8000) && ![0x12, 0x1A, 0x10, 0x11].includes(t)) m = [m[0], m[1], m[2], 0];
+      px = fromMasks(raw, w, h, fbpp, m);
+    }
+  } else throw new Error("Unsupported PVR v2 pixel type 0x" + t.toString(16));
+  return { px, w, h, flip: !!(flags & 0x10000), info: `PVR v2 · ${w}×${h} · ${name} · mips ${mips}` };
+}
+
+// ---------------------------------------------------------------- PVR v3
+const V3C = { 0: "PVRTC 2bpp RGB", 1: "PVRTC 2bpp RGBA", 2: "PVRTC 4bpp RGB", 3: "PVRTC 4bpp RGBA",
+  6: "ETC1", 7: "DXT1", 9: "DXT3", 11: "DXT5", 22: "ETC2 RGB", 23: "ETC2 RGBA" };
+function decodeV3(d) {
+  const dv = new DataView(d.buffer, d.byteOffset, d.byteLength), u = o => dv.getUint32(o, true);
+  const lo = u(8), hi = u(12), ct = u(20), h = u(24), w = u(28), mips = u(44), meta = u(48);
+  const raw = d.subarray(52 + meta);
+  if (hi === 0) {
+    const name = V3C[lo] || "compressed #" + lo;
+    if (lo === 2 || lo === 3) return { px: decodePVRTC4(raw, w, h), w, h, flip: false, info: `PVR v3 · ${w}×${h} · ${name} · mips ${mips}` };
+    throw new Error(name + " is not supported yet");
+  }
+  let order = "", widths = [];
+  for (let i = 0; i < 4; i++) { const c = (lo >>> (8 * i)) & 0xff; if (!c) break; order += String.fromCharCode(c); widths.push((hi >>> (8 * i)) & 0xff); }
+  if (![0, 2, 4, 6].includes(ct)) throw new Error("Float/signed channel types are not supported");
+  const bpp = widths.reduce((a, b) => a + b, 0), nb = bpp / 8, aligned = widths.every(x => x === 8);
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const o = i * 4; out[o] = out[o+1] = out[o+2] = order === "a" ? 255 : 0; out[o+3] = 255;
+    let px = 0; if (!aligned) for (let k = 0; k < nb; k++) px += raw[i*nb+k] * 2 ** (8*k);
+    let shift = bpp;
+    for (let c = 0; c < order.length; c++) {
+      let v;
+      if (aligned) v = raw[i * nb + c];
+      else { shift -= widths[c]; v = scale(Math.floor(px / 2 ** shift) & ((1 << widths[c]) - 1), widths[c]); }
+      const ch = order[c], idx = "rgba".indexOf(ch);
+      if (idx >= 0) out[o + idx] = v; else if (ch === "i" || ch === "l") out[o] = out[o+1] = out[o+2] = v;
+    }
+  }
+  return { px: out, w, h, flip: false, info: `PVR v3 · ${w}×${h} · ${order}${widths.join("")} · mips ${mips}` };
+}
+
+async function decode(bytes) {
+  const d = await unwrap(bytes);
+  if (d[0] === 0x50 && d[1] === 0x56 && d[2] === 0x52 && d[3] === 3) return decodeV3(d);
+  if (String.fromCharCode(...d.subarray(44, 48)) === "PVR!") return decodeV2(d);
+  throw new Error("Not a PVR file (no PVR v2/v3 header found)");
+}
+
+// ---------------------------------------------------------------- UI
+const $ = id => document.getElementById(id);
+const items = [];
+let dl = null;
+window.claude?.use?.("downloads").then(x => { dl = x; render(); }).catch(() => {});
+
+function baseName(n) {
+  for (const e of [".pvr.ccz", ".pvr.gz", ".pvrgz", ".pvr"]) if (n.toLowerCase().endsWith(e)) return n.slice(0, -e.length);
+  return n;
+}
+function toCanvas(r, flip) {
+  const c = document.createElement("canvas"); c.width = r.w; c.height = r.h;
+  const ctx = c.getContext("2d");
+  let px = r.px;
+  if (flip) {
+    px = new Uint8ClampedArray(px.length); const row = r.w * 4;
+    for (let y = 0; y < r.h; y++) px.set(r.px.subarray(y * row, (y + 1) * row), (r.h - 1 - y) * row);
+  }
+  ctx.putImageData(new ImageData(px, r.w, r.h), 0, 0);
+  return c;
+}
+async function build(it) {
+  const c = toCanvas(it.res, it.res.flip !== $("flip").checked);
+  it.blob = await new Promise(res => c.toBlob(res, "image/png"));
+  if (it.url) URL.revokeObjectURL(it.url);
+  it.url = URL.createObjectURL(it.blob);
+}
+
+async function addFiles(files) {
+  for (const f of files) {
+    const it = { name: f.name, out: baseName(f.name) + ".png" };
+    items.push(it); render();
+    try { it.res = await decode(new Uint8Array(await f.arrayBuffer())); await build(it); }
+    catch (e) { it.error = e.message || String(e); }
+    render();
+  }
+}
+
+async function save(it) {
+  if (!dl || !it.blob) return;
+  try { await dl.save({ filename: it.out, data: it.blob }); it.msg = "Saved"; }
+  catch (e) { it.msg = e.code === "declined" ? "" : "Could not save: " + (e.message || e.code); }
+  render();
+}
+
+function render() {
+  $("bar").hidden = !items.length;
+  const ok = items.filter(i => i.blob);
+  $("count").textContent = `${items.length} file${items.length === 1 ? "" : "s"}`;
+  $("saveAll").hidden = !dl; $("saveAll").disabled = !ok.length;
+  const list = $("list"); list.textContent = "";
+  for (const it of items) {
+    const el = document.createElement("div"); el.className = "item";
+    const th = document.createElement("div"); th.className = "thumb";
+    if (it.url) {
+      const img = new Image(); img.src = it.url; img.alt = it.out; th.append(img);
+      th.onclick = () => openViewer(it.url);
+    }
+    const meta = document.createElement("div"); meta.className = "meta";
+    const nm = document.createElement("div"); nm.className = "name"; nm.textContent = it.name;
+    meta.append(nm);
+    const info = document.createElement("div");
+    if (it.error) { info.className = "err"; info.textContent = it.error; }
+    else if (!it.res) { info.className = "info"; info.textContent = "Decoding…"; }
+    else { info.className = "info"; info.textContent = it.res.info; }
+    meta.append(info);
+    if (it.blob) {
+      const acts = document.createElement("div"); acts.className = "actions";
+      if (dl) {
+        const b = document.createElement("button"); b.textContent = "Save " + it.out; b.onclick = () => save(it);
+        acts.append(b);
+      } else {
+        const n = document.createElement("span"); n.className = "note";
+        n.textContent = "Open the preview, then right-click (or long-press) the image and choose Save Image.";
+        acts.append(n);
+      }
+      if (it.msg) { const m = document.createElement("span"); m.className = "note"; m.textContent = it.msg; acts.append(m); }
+      meta.append(acts);
+    }
+    el.append(th, meta); list.append(el);
+  }
+}
+
+function openViewer(url) {
+  const v = document.createElement("div"); v.className = "viewer";
+  const box = document.createElement("div"); const img = new Image(); img.src = url;
+  box.append(img); v.append(box);
+  v.onclick = e => { if (e.target === v) v.remove(); };
+  img.onclick = () => v.remove();
+  document.body.append(v);
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape") document.querySelector(".viewer")?.remove(); });
+
+const drop = $("drop"), input = $("file");
+drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+input.addEventListener("change", () => { addFiles([...input.files]); input.value = ""; });
+["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => addFiles([...e.dataTransfer.files]));
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => { if (!drop.contains(e.target)) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } });
+
+$("flip").addEventListener("change", async () => { for (const it of items) if (it.res) await build(it); render(); });
+$("clear").addEventListener("click", () => { items.forEach(i => i.url && URL.revokeObjectURL(i.url)); items.length = 0; render(); });
+$("saveAll").addEventListener("click", async () => { for (const it of items) if (it.blob) await save(it); });
+</script>
+
+</body></html>
